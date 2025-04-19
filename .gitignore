@@ -1,0 +1,7 @@
+rsconnect/ 
+renv/ 
+*.html 
+*.csv
+.Rhistory 
+.RData
+.Rproj.user

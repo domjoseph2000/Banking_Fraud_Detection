@@ -1,0 +1,546 @@
+---
+title: "Fraud Detection on Bank Payments"
+author: "domjoseph2000@gmail.com  "
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This synthetically generated dataset consists of payments from various customers made in different time periods and with different amounts. For more information on the dataset you can check the Kaggle page for this dataset: 
+
+[https://www.kaggle.com/code/turkayavci/fraud-detection-on-bank-payments/notebook]
+
+Data As we can see in the first rows below the dataset has 9 feature columns and a target column. The feature columms are :
+
+*Step*: This feature represents the day from the start of simulation. It has 180 steps so simulation ran for virtually 6 months.<br>
+*Customer*: This feature represents the customer id.<br>
+*zipCodeOrigin*: The zip code of origin/source.<br>
+*Merchant*: The merchant's id.<br>
+*zipMerchant*: The merchant's zip code.<br>
+
+*Age*: Categorized age<br>
+    0: <= 18,<br>
+    1: 19-25,<br>
+    2: 26-35,<br>
+    3: 36-45,<br>
+    4: 46:55,<br>
+    5: 56:65,<br>
+    6: > 65<br>
+    U: Unknown<br>
+    
+*Gender*: Gender for customer<br>
+    E: Enterprise,<br>
+    F: Female,<br>
+    M: Male,<br>
+    U: Unknown<br>
+*Category*: Category of the purchase. I won't write all categories here, we'll see them later in the analysis.<br>
+*Amount*: Amount of the purchase.<br>
+*Fraud*: Target variable which shows if the transaction fraudulent(1) or benign(0)
+
+```{r, warning=FALSE, message=FALSE}
+source("packages.r")
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(tidyr)
+library(corrplot)
+library(caret)
+library(rsample)
+#library(rpart)  # for decision tree
+#library(rpart.plot)
+#library(rattle) # for plotting decision tree
+#library(e1071)  # For Naive Bayes classifier
+library(naivebayes)
+#library(randomForest)
+library(pROC)
+```
+
+
+## **1. Import Data & Preprocessing**
+
+```{r}
+transactions = read.csv(paste0(getwd(),"/bs140513_032310.csv"))
+head(transactions)
+
+```
+Now lets look at the structure of th imported data.
+
+```{r}
+str(transactions)
+```
+We notice that the character fields are within single quotes `''`. Remove the `'` character around each entry in the data.
+```{r}
+charcols = sapply(transactions,class) == "character"
+print(colnames(transactions[charcols]))
+transactions[charcols] <- lapply(transactions[charcols], gsub, pattern="'", replacement='')
+head(transactions)
+```
+Verify the structure of data...
+```{r}
+str(transactions)
+```
+
+Values of zipcodeOri and zipMerchant are same throughout the dataa so might as well drop them.
+
+Unique values of zipcodeOri
+```{r}
+unique(transactions$zipcodeOri)
+```
+Unique values of zipMerchant
+```{r}
+unique(transactions$zipMerchant)
+```
+Since there is one value for zipMerchant and zipcodeOri, we can remove these fields.
+```{r}
+transactions = transactions %>% dplyr::select(-c(zipMerchant, zipcodeOri))
+```
+
+Now lets look at the data for NULL values in any attributes.
+
+```{r}
+colSums(is.na(transactions))
+```
+No missing observations are present in the data. Before moving to the next step, lets look at the size of the data
+
+```{r}
+dim(transactions)
+```
+
+## **2. Univariate Analysis**
+
+In this section, we analyse each variable individually to gain insight from it. We explore the distribution properties of the variables and also their relationship with Fraud Rate.
+
+### Fraud
+
+'fraud' is a binary indicator denoting whether a transaction is fraudulent or not. We expect an overwhelming majority of the transactions to be not Fraud.
+
+```{r}
+print("summary statistics for variable Fraud:")
+cat("\n")
+summary(as.factor(transactions$fraud))
+```
+
+```{r}
+transtype = table(transactions$fraud) %>% as.data.frame() %>% rename("fraud"="Var1")
+
+ggplot(transtype, aes(x = fraud, y = Freq, fill = fraud)) +
+  geom_bar(stat = "identity", color = "black") +
+  labs(x = "fraud", y = "Count", title = "Bar Chart of Distribution by fraud") +
+  theme_minimal()
+```
+Fraud data will be imbalanced like you see in the plot above and from the count of instances. To balance the dataset one could perform oversample or undersample technique, although no such method has been adopted for the purpose of this model exercise..
+
+### gender
+
+Unique values of gender are
+```{r}
+unique(transactions$gender)
+```
+Lets look at the distribution by each level of gender, including the fraud rate. It helps us understand if Fraudsters choose specific gender for fraud operations.
+```{r}
+gender = group_by(transactions, gender) %>%  summarise(Freq=n(), fraudcount = sum(fraud), fraudrate=sum(fraud)/n()) %>% as.data.frame() %>% mutate(Perc = Freq/sum(Freq))
+print("Distribution for variable gender:")
+cat("\n")
+gender
+```
+From the data it looks like the number of fraud cases is twice for Females as compared to males. But overall, females also performed more number of banking transactions. However, if we look at the fraudrate (count of frauds to total count of transactions), we see that likelihood of a female customer being a victim of fraud transaction is still higher compared to males.
+
+Lets visualize this using a histogram and line graph.
+
+```{r}
+ggplot(gender, aes(x = gender, y = Perc)) +
+  geom_bar(stat = "identity", col = "black", aes(fill=gender)) +
+  geom_line(aes(x = gender, y = 40*fraudrate, group = 1), color="red", stat = "identity")+
+  labs(x = "gender", y = "Count", title = "Distribution/fraud by gender") +
+  scale_y_continuous(sec.axis=sec_axis(~./40*100,name="%Frauds")) 
+```
+
+So in conclusion, we observe that majority of transactions are made by males and females, with females showing more likelihood of fraud than males. Enterprise transactions have 3rd highest prevalence of fraud transaction among the genders.
+
+### age
+
+First lets look at the unique values of age.
+```{r}
+unique(transactions$age)
+```
+
+Next we look at the distribution of variable age. Age is a categorical variable, so the univariate analysis involves looking at the distribution of the distinct values and the trend of % fraud among them. 
+
+```{r}
+age = group_by(transactions, age) %>%  summarise(Freq=n(), fraudcount=sum(fraud), fraudrate=sum(fraud)/n()) %>% as.data.frame() %>% mutate(Perc = Freq/sum(Freq))
+print("summary statistics for variable age:")
+cat("\n")
+age
+```
+
+Lets visualise to understand this table further.
+
+```{r}
+ggplot(age) +
+  geom_bar(aes(x = age, y = Perc), stat = "identity", col = "black", fill='skyblue') +
+  geom_line(aes(x = age, y = 10*fraudrate, group = 1), color="red", stat = "identity")+
+  labs(x = "age", y = "Count", title = "Distribution/Fraudrate by age") +
+  scale_y_continuous(sec.axis=sec_axis(~./10,name="%Frauds")) 
+ 
+
+```
+
+Majority of transactions are made by people in the age groups 2,3,4, which represents the age  26-55. The age group 0 has the highest risk of fraud at around 2%. The percentage of frauds are almost constant across groups 1 to 4, and then its falls slightly in groups 5 and 6. Hence it could mean that older people are less likely to be a victim of fraud whereas very young people (<18) are highly likely.
+
+### amount
+
+Before performing univariate analysis, we find the cases where transaction amount <= 0. This could be potential data issues.
+
+```{r}
+sum(transactions$amount==0)
+```
+There are 52 records where this happens, so we need to remove these observations also.
+
+```{r}
+transactions = transactions %>% dplyr::filter(amount>0)
+```
+
+
+Now lets look at the summary statistics of `amount` variable. 
+```{r}
+print("summary statistics for variable amount:")
+cat("\n")
+summary(transactions$amount)
+```
+
+The summary statistics output indicates that the distribution of `amount` could be right skewed as Mean>Median. Now lets visualize the distribution of the variable using a histogram. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = transactions,aes(amount)) +
+  geom_histogram(aes(y = after_stat(count / sum(count))), fill="green")+ 
+  xlim(c(0, 400))+
+  #ylim(c(0, 0.2))+
+  labs(x='amount', title=paste0("Histogram of amount"), y = "density")
+```
+
+From the distribution of the variable, it can be observed that the variable amount is heavily right skewed.Note that the plot is right censored to account for extremely large valus.
+
+**Log transformation of amount**
+To get a better view at the data, we can study the distribution of `log(amount)`, as the logarithmic transformation will make the right skewed data more symmetric.
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data = transactions,aes(log(amount))) +
+  geom_histogram(aes(y = after_stat(count / sum(count))), fill="green")+ 
+  #xlim(c(0, 20))+
+  #ylim(c(0, 0.25))+
+  labs(x='log(amount)', title=paste0("Histogram of log(amount)"), y = "density")
+```
+
+Clearly, `log(amount)` offers a better view of the distribution of the variable. This could indicate a potential new feature that could be derived to be used in the model.
+
+Now lets look at the distribution of `log(amount)` by `fraud` to see if there is difference in distribution between fraud transactions and normal transactions.
+
+```{r}
+ggplot(data = transactions,aes(x = log(amount), y=after_stat(density), fill = factor(fraud))) +
+# geom_density(alpha=0.6, position = 'identity') +
+geom_histogram(alpha=0.6, position = 'identity') +
+scale_fill_manual(values=c("#69b3a2", "#404080")) +
+labs(fill="", title=paste0("Histogram of log(amount) by fraud"), x='log(amount)', y = "density")
+```
+
+We can observe that the distribution of amount in fraud transactions is significantly towards the right when compared to normal transactions, indicating a differentiation between transaction amounts of fraud and non fraud cases. Larger transaction amounts are possible warning signals for possible fraud. 
+
+### category
+
+Next we look at the distribution of variable transaction type. It is a categorical variable, so the univariate analysis involves looking at the distribution of the distinct values of the attribute. 
+
+```{r}
+transtype = group_by(transactions, category) %>%  
+  summarise(Freq=n(),  fraudcount=sum(fraud), fraudrate=sum(fraud)/n()) %>% as.data.frame() %>% mutate(Perc = Freq/sum(Freq))
+print("summary statistics for variable category:")
+cat("\n")
+transtype
+```
+
+The count of observations in each value for this attribute can be visualised through a barchart. The barchart can be generated using 'geom_bar( )' command in ggplot2 package.
+
+The barchart is supplemented by a line graph of the % of fraud cases in each category.
+
+```{r}
+ggplot(transtype) +
+  geom_bar(aes(x = category, y = Perc), col = "black", stat = "identity") +
+  geom_line(aes(x = category, y = fraudrate, group = 1), color="red", stat = "identity")+
+  labs(x = "Transaction category", y = "Percentage", title = "Distribution/Fraudrate by category") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_y_continuous(sec.axis=sec_axis(~.,name="%Frauds")) 
+  
+```
+
+The graph shows that es_leisure, es_sportsandtoys, and es_travel have high prevalence of fraud cases. 
+
+We observe that 'es_transportation' has majority of the observations yet low fraud cases.To get a view of the distribution of the remaining categories, we may observe the barplot after removing this category from the data.
+
+```{r}
+
+ggplot(subset(transtype, category!="es_transportation")) +
+  geom_bar(aes(x = category, y = Perc), col = "black", stat = "identity") +
+  geom_line(aes(x = category, y = 0.04*fraudrate, group = 1), color="red", stat = "identity")+
+  labs(x = "Transaction category", y = "Percentage", title = "Distribution/Fraudrate by category (excl es_transportation)") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_y_continuous(sec.axis=sec_axis(~./0.04,name="%Frauds")) 
+
+```
+
+There are more credit card transactions in the categories es_food, es_health and es_wellnessandbeauty . But the same categories also have lower prevalence of fraud transactions. There are very few credit card transactions in categories with high prevalence of fraud - es_leisure, es_sportsandtoys, and es_travel 
+
+## **3. Bivariate Analysis**
+
+In Bivariate analysis we look at the strength of relationship of variables with each other. We look at the relationship between the numeric variables using correlation matrix. 
+
+### amount vs step
+
+The correlation between variables `amount` and `step` is negligible. 
+```{r, echo=FALSE}
+cor(transactions[c('step', 'amount')])
+```
+
+The two variables have very low correlation with each other. Therefore the two variables are not expected to interfere with each other during the modelling stage. Similarly, we can design a Bivariate analysis for the categorical variables.
+
+### category vs age
+
+Since correlation is only meaningful for continuous variables, we can define the distribution  of Transaction category by age.
+
+```{r}
+cat_by_age = table(transactions$category, transactions$age) %>% 
+                    as.data.frame() %>% 
+                    rename("category"="Var1", "age"="Var2") %>% 
+                   # group_by(IsFraud) %>% 
+                    mutate(Perc = Freq/sum(Freq) * 100) 
+
+cat_by_age[c("category", "age", "Perc")] %>% 
+        pivot_wider(names_from = age, values_from = Perc, names_prefix = "age =")
+```
+
+*Distribution of Transaction Category vs age*
+
+```{r}
+  ggplot(data = cat_by_age, aes(x = age, y = category, fill = Perc)) +
+  geom_tile()+
+  scale_fill_gradient(low = "white", high = "darkred")+
+  labs(x = "age", y = "category", title = "Heatmap") 
+```
+
+Majority of spending is in transportation in all age groups and especially in groups 2,3 and 4. lets remove the records on transportation and see if the heat maps reveal any relationships. 
+
+```{r}
+ggplot(data = subset(cat_by_age, category!="es_transportation"), aes(x = age, y = category, fill = Perc)) +
+  geom_tile()+
+  scale_fill_gradient(low = "white", high = "darkred")+
+  labs(x = "category", y = "age", title = "Heatmap (excl es_transportation)") 
+```
+
+From this graph and table, we infer that for almost all age groups, people spend majority of transactions for health, food and wellness&beauty. Categories with High frequency of transactions could be potential targets for fraudsters.
+
+### category vs amount
+
+*Distribution of Transaction Category vs amount*
+
+We can see the mean amount and fraud percent by category below. Fraudsters may chose the categories which people spend more on average. Let's confirm this hypothesis by checking the average amount transacted in each category.
+```{r}
+transactions %>% group_by(category) %>% summarise(MeanAmount=mean(amount), fraudrate=sum(fraud)/n())
+```
+
+In categories like leisure and travel which are the most selected categories for fraudsters, we can see that transaction amount is also significantly high. What this means is that fraudsters are likely to choose travel related transactions(example flight/train bookings or tours) for fraud. Travel related transaction in particular marks a significatly high average transaction value.
+
+```{r}
+ggplot(data = transactions) +
+  geom_boxplot(aes(x = category, y = amount))+
+    theme(axis.text.x = element_text(angle = 90))+
+      labs(title = "Boxplot category vs amount") +
+        ylim(0, 3000)
+```
+
+We can also look at distribution of amount by category after excluding `es_travel`for better analysis of remaining categories.
+
+```{r}
+ggplot(data = subset(transactions, category!="es_travel")) +
+  geom_boxplot(aes(x = category, y = amount))+
+    theme(axis.text.x = element_text(angle = 90))+
+      ylim(0, 1000) +
+        labs(title = "Boxplot category vs amount (excl es_travel)") 
+```
+
+After removing the category `es_travel`, we observe that majority of the transactions are within transaction amount of 500. We observe few outliers in each category but even the max value of outliers is less than 2000. 
+
+Other than `travel`, next highest median spending is for `leisure`, `sports and toys` and `hotel service`, all of which have significantly high cases of fraud. Hence, our hypothesis that fraudsters choosing the categories which people spend more is only partly correct.
+
+### age vs amount
+
+*Distribution of age vs amount*
+
+The red dot is the mean of each age group.
+
+```{r}
+ggplot(data = transactions, aes(x = age, y = amount)) +
+  geom_boxplot()+
+  labs(title = "Boxplot age vs amount") +
+    geom_point(data = transactions %>% group_by(age) %>% summarise(Mean=mean(amount)),
+             aes(x = age, y = Mean), color = "red", size = 3) +
+  ylim(0, 100) 
+```
+
+The boxplot has been trimmed to accommodate only the range bars and exclude some of the outliers because to enhance visibility. The boxplot shows that median transaction amount is similar across groups. Also, the initerquartlie ranges are similar because the boxes are comparable in size.  
+
+The mean transaction amount is highest for group 0 (<18). This age group is also more likely to be a victim of fraud as compared to others. This could indicate that fraudsters target certain age group more than others. 
+
+### gender vs amount
+
+Distribution of gender vs amount
+
+The red dot is the mean of each gender.
+```{r}
+transactions %>% group_by(gender) %>% summarise(Mean=mean(amount), Median = median(amount))
+```
+
+```{r}
+ggplot(data = transactions, aes(x = gender, y = amount)) +
+  geom_boxplot()+
+  labs(title = "Boxplot gender vs amount") +
+    geom_point(data = transactions %>% group_by(gender) %>% summarise(Mean=mean(amount)),
+             aes(x = gender, y = Mean), color = "red", size = 3) +
+  ylim(0,100)
+```
+
+The boxplot has been trimmed to accommodate only the range bars and exclude some of the outliers because to enhance visibility. The boxplot shows that median transaction amount is similar across groups. Also, the inter quartile ranges are similar because the boxes are comparable in size.  The mean and median transaction amount is highest for females but not significantly different from males. 
+
+The same can be understood with the help of boxplots after logarithmic transformation - log(amount)
+
+```{r}
+ggplot(data = transactions, aes(x = gender, y = log(amount))) +
+  geom_boxplot()+
+  labs(title = "Boxplot gender vs log(amount)") +
+    geom_point(data = transactions %>% group_by(gender) %>% summarise(Mean=mean(log(amount))),
+             aes(x = gender, y = Mean), color = "red", size = 3)
+```
+
+## **4. Feature Engineering**
+
+In this section, we create new attributes by transforming pre-processed data, that could potentially have useful information in differentiating fraud transactions or useful as control variables, and thus improving the performance of the model.
+
+Based on the initial data exploration we performed so far, the following transformations have been identified and implemented below.
+
+1) Logarithmic transformation of `amount`.<br>
+2) Modified category variable. Levels with low rates of fraud (<10%) have been clubbed together into one single variable called `es_misc`. This is expected to allow more risk differentiation.<br>
+3) Modified age variable. levels of age `{'1','2','3','4','5'}` have similar fraud rates, hence they are grouped together into a single level for improving the variable performance. <br>
+
+```{r}
+transactions = transactions %>% 
+  dplyr::mutate(
+    log_amount = log(amount),
+    mod_age = case_when(age %in% c('1','2','3','4','5','U') ~ '1-5',
+                        TRUE ~ age
+                        ),
+    mod_category = case_when(category %in% c('es_leisure', 
+                                             'es_hotelservices', 
+                                             'es_home', 
+                                             'es_sportsandtoys', 
+                                             'es_travel', 
+                                             'es_otherservices', 
+                                             'es_health') ~ category,
+                        TRUE ~ 'es_misc'
+                        )
+    
+)
+```
+
+
+## **5. Fitting a classification model**
+
+### sampling data
+
+Create test and train data.
+```{r}
+set.seed(123)
+split_strat <- initial_split(transactions, prop = 0.8,
+                             strata = 'fraud')
+train <- training(split_strat)
+test <- testing(split_strat)
+```
+
+
+### Fit logistic regression model
+
+Use train data to perform logistic regression.
+
+```{r}
+model.log <- glm(fraud ~ log_amount + gender + mod_age + mod_category, data = train, family = binomial(link = 'logit'))
+summary(model.log)
+```
+
+Lets test the performance of the model on train and test data separately.
+
+**Predictions on train data.** 
+
+```{r,warning=FALSE, message=FALSE}
+prediction_train = predict(model.log, train, type = 'response')
+prediction_train = factor((prediction_train>=0.50)*1)
+confusionMatrix(prediction_train, factor(train$fraud), positive = '1')
+```
+
+**Predictions on test data.** 
+
+```{r,warning=FALSE, message=FALSE}
+prediction_test = predict(model.log, test, type = 'response')
+prediction_test = factor((prediction_test>=0.50)*1)
+confusionMatrix(prediction_test, factor(test$fraud), positive = '1')
+```
+Using a 50% threshold (ie, fraud = 1 if predicted probability > 0.50), the Sensitivity of the model is only around 57%. The model is favoring low FPR (few false alarms) at the expense of missing frauds. At an even lower threshold like 20%, the model may start to show better sensitivity. This can also be visualized using ROC curve.
+
+```{r,warning=FALSE, message=FALSE}
+predicted_probs = predict(model.log, test, type = 'response')
+roc_obj <- roc(test$fraud, predicted_probs)
+auc(roc_obj)  # Output: AUC value
+```
+```{r,warning=FALSE, message=FALSE}
+plot(1-roc_obj$specificities, roc_obj$sensitivities, main = paste0("AUC = ", round(auc(roc_obj), 3)), xlab = 'false positive rate', ylab = 'True positive rate')
+abline(a = 0, b = 1, lty = 2, col = "gray")  
+```
+
+### Fit Naive bayes model
+
+Use train data to perform Naive Bayes.
+
+```{r,warning=FALSE, message=FALSE}
+model.nb <- naive_bayes(factor(fraud) ~ log_amount + gender + mod_age + mod_category, data = train, usekernel = T, laplace = 10)
+summary(model.nb)
+```
+
+**Predictions on train data.**
+
+```{r,warning=FALSE, message=FALSE}
+prediction_train = predict(model.nb, train, type = 'class')
+confusionMatrix(prediction_train, factor(train$fraud), positive = '1')
+```
+
+**Predictions on test data.** 
+
+```{r,warning=FALSE, message=FALSE}
+prediction_test = predict(model.nb, test, type = 'class')
+confusionMatrix(prediction_test, factor(test$fraud), positive = '1')
+```
+
+Model has a sensitivity of almost 72% which means 72% of the fraud cases can be detected using the naive bayes algorithm. It also has a specificity of 99%, which is also good. Specificity indicates how well the model is able to distinguish a non fraud case.
+
+Now lets take a loot at the AUC value and ROC curve. 
+
+```{r,warning=FALSE, message=FALSE}
+predicted_probs = predict(model.nb, test, type = 'prob')[,"1"]
+roc_obj <- roc(test$fraud, predicted_probs)
+auc(roc_obj)  # Output: AUC value
+```
+```{r,warning=FALSE, message=FALSE}
+plot(1-roc_obj$specificities, roc_obj$sensitivities, main = paste0("AUC = ", round(auc(roc_obj), 3)), xlab = 'false positive rate', ylab = 'True positive rate')
+abline(a = 0, b = 1, lty = 2, col = "gray")  
+```
+
+## **6. Conclusion**
+
+Out of the models, Naive Bayes is observed to perform fairly well compared to other modelling techniques, displaying a sensitivity of 72%. This is decent considering the imbalance class problem we observed.
