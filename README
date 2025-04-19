@@ -1,0 +1,5 @@
+1. Extract the zip file, which is the data for the R file.
+
+2. Run `Fraud Detection.RMD` file, which also installs all the required packages for you before performing further analysis of the project.
+
+3. Alternately, you can open and run `renv-setup.R` first before running `Fraud Detection.RMD`, if you wish to run and manage the project as an renv project.
