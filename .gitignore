@@ -1,5 +1,6 @@
 rsconnect/ 
 renv/ 
+data/bs140513_032310.csv
 *.html 
 *.csv
 .Rhistory 

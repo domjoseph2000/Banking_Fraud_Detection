@@ -1,5 +1,27 @@
-1. Extract the zip file, which is the data for the R file.
+# ----------------------------------
+# |       	Run RMD file        	|
+# ----------------------------------
+
+1. Extract the zip file data/bs140513_032310.7z, which is the data for the R file.
 
 2. Run `Fraud Detection.RMD` file, which also installs all the required packages for you before performing further analysis of the project.
 
 3. Alternately, you can open and run `renv-setup.R` first before running `Fraud Detection.RMD`, if you wish to run and manage the project as an renv project.
+
+# ----------------------------------
+# |       		DOCKER	        	|
+# ----------------------------------
+
+This method lets you run the code in a docker container. You may need to install docker on your computer (if not done already).
+
+1. Navigate to the project folder location
+cd 'A:/path/to/your/Fraud Detection'
+
+2. Build docker image
+docker build -t <image-name> -f .\dockermode\Dockerfile . 
+
+3. Run docker container
+docker run -v "$(Get-location)\output:/home/project/output" <image-name>
+
+4. Run a container and enter the docker in an interactive shell
+docker run --rm -it <image-name> bash

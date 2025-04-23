@@ -39,7 +39,7 @@ Data As we can see in the first rows below the dataset has 9 feature columns and
 *Fraud*: Target variable which shows if the transaction fraudulent(1) or benign(0)
 
 ```{r, warning=FALSE, message=FALSE}
-source("packages.r")
+source(paste0(getwd(),"/packages.R"))
 ```
 
 ```{r, warning=FALSE, message=FALSE}
@@ -61,7 +61,7 @@ library(pROC)
 ## **1. Import Data & Preprocessing**
 
 ```{r}
-transactions = read.csv(paste0(getwd(),"/bs140513_032310.csv"))
+transactions = read.csv(paste0(getwd(),"/data/","/bs140513_032310.csv"))
 head(transactions)
 
 ```
